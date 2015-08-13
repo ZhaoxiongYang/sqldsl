@@ -58,6 +58,7 @@ tablemap = toTableMap table
 table = do
   declareTable user
   declareTable essay
+  declareTable document
   endProgram
 
 user = do
@@ -71,16 +72,18 @@ userProperties =
   ,("pwdhash", SqlString)]
 userConnections =
   [("essay", Many)
-  ,("author", Many)
-  ,("essay", Many)
-  ,("reading", Many)
-  ,("user", Many)]
+--  ,("author", Many)
+-- ,("essay", Many)
+--  ,("reading", Many)
+--  ,("user", Many)]
+  ]
 
 essay = do
   name "essay"
   primaryKey "essayid" SqlInt
   property "content" SqlText
   connection "user" One
+  return ()
   connection "document" Many
   endTable
 
@@ -102,17 +105,29 @@ data Table = Table { tName         :: String
 
 -- Create full map
 toTableMap :: SqlDsl a -> Either String (Map String Table)
-toTableMap program = toTableMap' empty program 
+toTableMap = validateTables <=< toTableMap' empty
 
 toTableMap' :: Map String Table -> SqlDsl a -> Either String (Map String Table)
-toTableMap' tableMap (Free EndProgram) = Right tableMap
-toTableMap' tableMap (Pure _) = Left "Missing EndProgram statement!"
-toTableMap' tableMap (Free (DeclareTable decl next)) = do
-  newTable <- toTable decl
-  let name = tName newTable
-  if member name tableMap
-    then Left $ "Table " ++ name ++ " defined twice!"
-    else toTableMap' (insert name newTable tableMap) next
+toTableMap' tableMap statement = case statement of
+  Free EndProgram -> Right tableMap
+  Pure _ -> Left "Missing EndProgram statement!"
+  Free (DeclareTable decl next) -> do
+    newTable <- toTable decl
+    let name = tName newTable
+    if member name tableMap
+      then Left $ "Table " ++ name ++ " defined twice!"
+      else toTableMap' (insert name newTable tableMap) next
+
+validateTables :: Map String Table -> Either String (Map String Table)
+validateTables tables = foldrWithKey validate (Right tables) tables
+  where
+    validate tableName table tables' = do
+      tables'' <- tables'
+      let failedConnections = Prelude.filter ( not . flip member tables . fst) (tConnections table)
+      if length failedConnections == 0
+        then return tables
+        else Left $ "Table " ++ tableName ++ " has nonexistent connections:\n"
+                    ++ show failedConnections
 
 toTable :: Declaration a -> Either String Table
 toTable decl = toTable' defaultTable decl
@@ -138,55 +153,17 @@ toTable' table statement = case statement of
                                   ++ show (tPrimaryKey table) ++ ". Second "
                                   ++ "definition: " ++ show (str, dataType)
   Free EndTable
-    | fullTable      table  -> Right table
+    | isFullTable    table  -> Right table
     | hasDefaultName table  -> Left "Table has undefined name!"
     | hasDefaultKey  table  -> Left "Table has undefined primary key!"
     | otherwise             -> Left "Unknown table definition error!"
   Pure next -> Left "Missing EndTable statement!"
 
-
---toTable' :: Table -> Declaration a -> Either String Table
---toTable' table (Free (Property str dataType next)) =
---  toTable' (table { tProperties = (str, dataType) : tProperties table }) next
---toTable' table (Free (Connection str connectionType next)) =
---  toTable' (table { tConnections = (str, connectionType) : tConnections table }) next
---toTable' table (Free (Name str next))
---  | hasDefaultName table = toTable' (table { tName = str }) next
---  | otherwise            = Left $ "Table name defined twice. First name: "
---                                ++ tName table ++ ". Second name: " ++ str
---toTable' table (Free (PrimaryKey str dataType next))
---  | hasDefaultKey table = toTable' (table { tPrimaryKey = (str, dataType) }) next
---  | otherwise           = Left $ "Primary key defined twice. First definition: "
---                               ++ show tPrimaryKey table ++ ". Second "
---                               ++ "definition: " ++ show (str, dataType)
---toTable' table (Free EndTable)
---  | fullTable      table  = Right table
---  | hasDefaultName table  = Left "Table has undefined name!"
---  | hasDefaultKey  table  = Left "Table has undefined primary key!"
---  | otherwise             = Left "Unknown table definition error!"
---toTable' table (Pure next) = Left "Missing EndTable statement!"
---
-fullTable :: Table -> Bool
-fullTable table = not (hasDefaultName table) && not (hasDefaultKey table)
+isFullTable :: Table -> Bool
+isFullTable table = not (hasDefaultName table) && not (hasDefaultKey table)
 
 hasDefaultName :: Table -> Bool
 hasDefaultName table = tName table == tName defaultTable
 
 hasDefaultKey :: Table -> Bool
 hasDefaultKey table = tPrimaryKey table == tPrimaryKey defaultTable
-
---toTable' :: Table -> Declaration a -> Either String Table
---toTable' table (Name str next)
---  | hasDefaultName table = toTable' (table { tName = str }) next
---  | otherwise            = Left "Table name defined twice. First name: "
---                                ++ tName table ++ ". Second name: " ++ str
---toTable' table (PrimaryKey str dataType next)
---  | hasDefaultKey table = toTable' (table { tPrimaryKey = (str, dataType) }) next
---  | otherwise           = Left "Primary key defined twice. First definition: "
---                               ++ show tPrimaryKey table ++ ". Second "
---                               ++ "definition: " ++ show (str, dataType)
---toTable' table (Property str dataType next) =
---  toTable' (table { tProperties = (str, dataType) : tProperties table }) next
---toTable' table (Connection str connectionType next) =
---  toTable' (table { tConnections = (str, connectionType) : tConnections table }) next
---
